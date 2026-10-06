@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from tunnelnet.audit import between, events, filter_records, last, most_recent
+from tunnelnet.audit import ImmutableAuditError
 from tunnelnet.cabin import Cabin, status_summary
 from tunnelnet.cable import danger_count, healthy_count, load_factor
 from tunnelnet.drain import Pit
@@ -661,7 +662,44 @@ def quota_add_usage(server: "Server", request: Request) -> Response:
 
 def audit_list(server: "Server", request: Request) -> Response:
     registry = server.runtime.audit
-    return json_response({"items": [record.as_dict() for record in registry.list()], "count": registry.count()})
+    records = _audit_search(server, request, default_scope="live")
+    return json_response(
+        {
+            "items": [record.as_dict() for record in records],
+            "count": len(records),
+            "live_count": registry.count(),
+            "scope": request.query_field("scope", "live"),
+        }
+    )
+
+
+def _audit_search(server: "Server", request: Request, default_scope: str = "all"):
+    """Shared retrieval path for live queries, archive views and exports."""
+
+    scope = request.query_field("scope", default_scope)
+    if scope not in ("live", "archive", "all"):
+        raise RequestError(400, "scope must be one of live, archive, all")
+    audit = server.runtime.audit
+    verify = request.query_field("verify") in ("1", "true", "yes")
+    if hasattr(audit, "search"):
+        return audit.search(
+            scope=scope,
+            event=request.query_field("event"),
+            start=request.query_field("start"),
+            end=request.query_field("end"),
+            verify=verify,
+        )
+    records = audit.records()
+    event = request.query_field("event")
+    if event:
+        records = filter_records(records, event)
+    start = request.query_field("start")
+    end = request.query_field("end")
+    if start:
+        records = [record for record in records if record.at >= start]
+    if end:
+        records = [record for record in records if record.at <= end]
+    return records
 
 
 def audit_query(server: "Server", request: Request) -> Response:
@@ -672,6 +710,9 @@ def audit_query(server: "Server", request: Request) -> Response:
         "events": events(records),
         "latest_id": registry.latest_id(),
     }
+    searched = _audit_search(server, request)
+    payload["matched"] = [record.as_dict() for record in searched]
+    payload["matched_count"] = len(searched)
     event = request.query_field("event")
     if event:
         payload["filtered"] = [record.as_dict() for record in filter_records(records, event)]
@@ -689,8 +730,58 @@ def audit_query(server: "Server", request: Request) -> Response:
 
 
 def audit_summary(server: "Server", request: Request) -> Response:
-    registry = server.runtime.audit
-    return json_response({"summary": registry.summary(), "by_event": registry.count_by_event()})
+    audit = server.runtime.audit
+    payload: dict[str, object] = {"summary": audit.summary(), "by_event": audit.count_by_event()}
+    if hasattr(audit, "counts"):
+        payload["storage"] = audit.counts()
+        payload["retention"] = {"online_days": audit.settings.online_days}
+    return json_response(payload)
+
+
+def audit_packages(server: "Server", request: Request) -> Response:
+    audit = server.runtime.audit
+    if not hasattr(audit, "packages"):
+        raise RequestError(404, "archive packages are unavailable for the in memory audit log")
+    return json_response({"packages": audit.packages(), "counts": audit.counts()})
+
+
+def audit_archive(server: "Server", request: Request) -> Response:
+    audit = server.runtime.audit
+    if not hasattr(audit, "archive_due"):
+        raise RequestError(400, "durable audit storage is not configured")
+    force = request.str_field("force_current") in ("1", "true", "yes")
+    return json_response(audit.archive_due(force_current=force))
+
+
+def audit_recover(server: "Server", request: Request) -> Response:
+    audit = server.runtime.audit
+    if not hasattr(audit, "recover"):
+        raise RequestError(400, "durable audit storage is not configured")
+    return json_response(audit.recover())
+
+
+def audit_retention(server: "Server", request: Request) -> Response:
+    audit = server.runtime.audit
+    if not hasattr(audit, "run_retention"):
+        raise RequestError(400, "durable audit storage is not configured")
+    dry_run = request.str_field("dry_run") in ("1", "true", "yes")
+    return json_response(audit.run_retention(dry_run=dry_run))
+
+
+def audit_settings(server: "Server", request: Request) -> Response:
+    audit = server.runtime.audit
+    if not hasattr(audit, "settings"):
+        raise RequestError(400, "durable audit storage is not configured")
+    if request.method == "POST":
+        online_days = request.int_field("online_days", audit.settings.online_days)
+        max_day_bytes = request.int_field("max_day_bytes", audit.settings.max_day_bytes)
+        if online_days < 1:
+            raise RequestError(400, "online_days must be >= 1")
+        if max_day_bytes < 1024:
+            raise RequestError(400, "max_day_bytes must be >= 1024")
+        updated = audit.update_settings(online_days=online_days, max_day_bytes=max_day_bytes)
+        return json_response({"settings": updated.as_dict()})
+    return json_response({"settings": audit.settings.as_dict()})
 
 
 def audit_marks(server: "Server", request: Request) -> Response:
@@ -711,7 +802,11 @@ def audit_append(server: "Server", request: Request) -> Response:
 
 
 def audit_clear(server: "Server", request: Request) -> Response:
-    return json_response({"count": server.runtime.audit.clear()})
+    try:
+        count = server.runtime.audit.clear()
+    except ImmutableAuditError as exc:
+        raise RequestError(405, str(exc)) from exc
+    return json_response({"count": count})
 
 
 def audit_marks_clear(server: "Server", request: Request) -> Response:
@@ -762,7 +857,8 @@ def simulate(server: "Server", request: Request) -> Response:
 
 
 def export_audit(server: "Server", request: Request) -> Response:
-    columns, rows = audit_export(server.runtime.audit)
+    records = _audit_search(server, request)
+    columns, rows = audit_export(records)
     return csv_response(to_csv(columns, rows))
 
 

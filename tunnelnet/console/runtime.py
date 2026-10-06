@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
+
 from tunnelnet.access import AccessService
-from tunnelnet.audit import AuditRegistry, MarkSet
+from tunnelnet.audit import AuditRegistry, AuditService, MarkSet
 from tunnelnet.cabin import PartitionTable, PowerBook, Registry as CabinRegistry, SuppressionLog
 from tunnelnet.cable import CableRegistry, MovingAverage
 from tunnelnet.drain import DrainService, PumpUnit
@@ -17,12 +19,13 @@ from tunnelnet.vent import VentService
 
 DEFAULT_ZONES = ("zone-1", "zone-2", "zone-3")
 DEFAULT_THRESHOLD = 75.0
+DEFAULT_AUDIT_DIR = "audit"
 
 
 class Runtime:
     """Owns one instance of each control component for a single store."""
 
-    def __init__(self, store: Store) -> None:
+    def __init__(self, store: Store, audit: AuditService | AuditRegistry | None = None) -> None:
         self.store = store
         self.namespaces = NamespaceRegistry()
         self.cabins = CabinRegistry()
@@ -40,4 +43,7 @@ class Runtime:
         self.patrol = PatrolService(self.cabins)
         self.power_book = PowerBook()
         self.quota = QuotaService(self.cabins, self.power_book)
-        self.audit = AuditRegistry()
+        if audit is not None:
+            self.audit = audit
+        else:
+            self.audit = AuditService(os.path.join(os.path.dirname(store.root) or ".", DEFAULT_AUDIT_DIR))

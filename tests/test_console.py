@@ -534,7 +534,75 @@ class ConsoleCase(unittest.TestCase):
         self.assertIn("kind,records", body)
 
         status, body = self.call("POST", "/api/audit/clear")
-        self.assertEqual(body["count"], 0)
+        self.assertEqual(status, 405)
+        self.assertIn("append only", body["error"])
+        status, _ = self.call("GET", "/api/audit")
+        self.assertEqual(status, 200)
+
+    def _dispatch(self, server, method: str, path: str, payload: dict | None = None, query: dict | None = None):
+        response = server.dispatch(method, path, payload, query)
+        body = response.body.decode("utf-8")
+        parsed = json.loads(body) if response.content_type.startswith("application/json") else body
+        return response.status, parsed
+
+    def test_durable_audit_persistence_across_restart(self) -> None:
+        audit_dir = f"{self._tmp.name}/audit"
+        server = Server(self.store, web_dir="web", audit_dir=audit_dir)
+        status, body = self._dispatch(
+            server, "POST", "/api/audit/append", {"event": "access_granted", "ref": "cabin-9"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["appended"]), 2)
+
+        restarted = Server(self.store, web_dir="web", audit_dir=audit_dir)
+        status, payload = self._dispatch(restarted, "GET", "/api/audit")
+        events = {item["event"] for item in payload["items"]}
+        self.assertIn("access_granted", events)
+        self.assertIn("access_granted_ref", events)
+
+    def test_archive_retention_and_search_routes(self) -> None:
+        audit_dir = f"{self._tmp.name}/audit"
+        server = Server(self.store, web_dir="web", audit_dir=audit_dir)
+        svc = server.runtime.audit
+        # Backdate two days of records.
+        from tunnelnet.audit import Record
+        from tunnelnet.audit.timeutil import shift_day
+
+        today = "2026-10-05"
+        for days_back, event in ((3, "access_granted"), (3, "fire_detect"), (0, "cycle")):
+            day = shift_day(today, -days_back)
+            svc.append(Record(id=f"r-{event}", event=event, at=f"{day}T08:00:00Z"))
+
+        status, body = self._dispatch(server, "POST", "/api/audit/settings", {"online_days": 2})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["settings"]["online_days"], 2)
+
+        status, body = self._dispatch(server, "POST", "/api/audit/retention", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["deleted_segments"])
+        self.assertEqual(body["blocked"], [])
+
+        status, body = self._dispatch(
+            server, "GET", "/api/audit", query={"scope": ["archive"], "event": ["fire_detect"]}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual([item["id"] for item in body["items"]], ["r-fire_detect"])
+
+        status, body = self._dispatch(server, "GET", "/api/audit/packages")
+        self.assertEqual(status, 200)
+        self.assertTrue(body["packages"])
+        self.assertTrue(all(package["present"] for package in body["packages"]))
+
+        status, body = self._dispatch(server, "GET", "/api/audit/summary")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["storage"]["total"], 3)
+
+        status, csv_body = self._dispatch(
+            server, "GET", "/api/export/audit", query={"scope": ["all"]}
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("r-fire_detect", csv_body)
+        self.assertIn("r-cycle", csv_body)
 
     def test_cycle_and_simulate_routes(self) -> None:
         status, body = self.call(

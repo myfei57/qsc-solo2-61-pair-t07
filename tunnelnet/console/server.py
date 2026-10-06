@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Iterable
 
+from tunnelnet.audit import AuditService
 from tunnelnet.store import Store
 
 from . import handlers
@@ -18,8 +19,9 @@ from .seed import seed_defaults
 class Server:
     """Owns the runtime state and dispatches console requests."""
 
-    def __init__(self, store: Store, web_dir: str = "web") -> None:
-        self.runtime = Runtime(store)
+    def __init__(self, store: Store, web_dir: str = "web", audit_dir: str | None = None) -> None:
+        audit = AuditService(audit_dir) if audit_dir else None
+        self.runtime = Runtime(store, audit=audit)
         seed_defaults(self.runtime)
         self.web_dir = web_dir
         self.router = Router()
@@ -86,7 +88,9 @@ class Server:
         return [response.body]
 
 
-def create_application(store: Store, web_dir: str = "web") -> Server:
+def create_application(
+    store: Store, web_dir: str = "web", audit_dir: str | None = None
+) -> Server:
     """Build a ready to serve console for the supplied store."""
 
-    return Server(store, web_dir)
+    return Server(store, web_dir, audit_dir=audit_dir)

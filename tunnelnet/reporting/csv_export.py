@@ -30,11 +30,20 @@ def to_csv(columns: Sequence[str], rows: Sequence[Sequence[object]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def audit_export(registry: AuditRegistry) -> tuple[list[str], list[list[str]]]:
-    """Columns and rows for the linkage audit trail."""
+def audit_export(source) -> tuple[list[str], list[list[str]]]:
+    """Columns and rows for the linkage audit trail.
 
+    Accepts either the registry (backwards compatible) or the record list the
+    unified audit reader returns, so online queries, archives and exports
+    render the same canonical records.
+    """
+
+    if hasattr(source, "list"):
+        records = source.list()
+    else:
+        records = list(source)
     columns = ["id", "event", "at"]
-    rows = [[record.id, record.event, record.at] for record in registry.list()]
+    rows = [[record.id, record.event, record.at] for record in records]
     return columns, rows
 
 
