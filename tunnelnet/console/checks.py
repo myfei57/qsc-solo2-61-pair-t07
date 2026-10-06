@@ -76,5 +76,11 @@ def run_checks(rt: "Runtime") -> list[dict[str, str]]:
         }
     )
 
-    checks.append({"name": "audit", "status": "ok", "detail": f"records={rt.audit.count()}"})
+    checks.append(
+        {
+            "name": "audit",
+            "status": "ok",
+            "detail": f"records={rt.audit.count()} packs={len(rt.audit_archive.packs())}",
+        }
+    )
     return checks

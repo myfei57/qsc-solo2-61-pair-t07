@@ -1,25 +1,45 @@
-"""Append only audit registry."""
+"""Append only audit registry, write-through to the durable journal."""
 
 from __future__ import annotations
 
 import threading
 
+from .journal import AuditJournal
 from .model import Record
 from .report import AuditState
 from .summary import count_by_event, summary
 
 
 class AuditRegistry:
-    """Keeps every linkage audit record in the order it was written."""
+    """Keeps every linkage audit record in the order it was written.
 
-    def __init__(self) -> None:
-        self._records: list[Record] = []
+    When a journal is attached the registry is a read cache over it: appends
+    are persisted before they become visible, deletions go through
+    :meth:`evict` after the journal copy is gone, and the in-memory order is
+    rebuilt from the journal on startup so a restart loses nothing.
+    """
+
+    def __init__(self, journal: AuditJournal | None = None) -> None:
+        self._journal = journal
+        self._records: list[Record] = journal.scan() if journal is not None else []
         self._lock = threading.RLock()
 
     def append(self, record: Record) -> Record:
         with self._lock:
+            if self._journal is not None:
+                self._journal.append(record)
             self._records.append(record)
         return record
+
+    def evict(self, record_id: str) -> bool:
+        """Drop one record from memory after its journal copy was deleted."""
+
+        with self._lock:
+            for index, record in enumerate(self._records):
+                if record.id == record_id:
+                    del self._records[index]
+                    return True
+        return False
 
     def records(self) -> list[Record]:
         with self._lock:
@@ -33,11 +53,6 @@ class AuditRegistry:
     def count(self) -> int:
         with self._lock:
             return len(self._records)
-
-    def clear(self) -> int:
-        with self._lock:
-            self._records = []
-        return 0
 
     def latest_id(self) -> str:
         with self._lock:

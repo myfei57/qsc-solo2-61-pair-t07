@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from tunnelnet.access import AccessService
-from tunnelnet.audit import AuditRegistry, MarkSet
+from tunnelnet.audit import (
+    ArchiveStore,
+    AuditJournal,
+    AuditRegistry,
+    MarkSet,
+    Retention,
+    RetentionPolicy,
+)
 from tunnelnet.cabin import PartitionTable, PowerBook, Registry as CabinRegistry, SuppressionLog
 from tunnelnet.cable import CableRegistry, MovingAverage
 from tunnelnet.drain import DrainService, PumpUnit
@@ -22,7 +29,7 @@ DEFAULT_THRESHOLD = 75.0
 class Runtime:
     """Owns one instance of each control component for a single store."""
 
-    def __init__(self, store: Store) -> None:
+    def __init__(self, store: Store, audit_online_days: int = 7) -> None:
         self.store = store
         self.namespaces = NamespaceRegistry()
         self.cabins = CabinRegistry()
@@ -40,4 +47,12 @@ class Runtime:
         self.patrol = PatrolService(self.cabins)
         self.power_book = PowerBook()
         self.quota = QuotaService(self.cabins, self.power_book)
-        self.audit = AuditRegistry()
+        self.audit_journal = AuditJournal.for_store(store)
+        self.audit = AuditRegistry(self.audit_journal)
+        self.audit_archive = ArchiveStore.for_store(store)
+        self.audit_retention = Retention(
+            self.audit,
+            self.audit_journal,
+            self.audit_archive,
+            RetentionPolicy(online_days=audit_online_days),
+        )

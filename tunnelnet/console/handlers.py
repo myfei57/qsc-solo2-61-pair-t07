@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from tunnelnet.audit import between, events, filter_records, last, most_recent
+from tunnelnet.audit import between, events, filter_records, last, most_recent, source_records
 from tunnelnet.cabin import Cabin, status_summary
 from tunnelnet.cable import danger_count, healthy_count, load_factor
 from tunnelnet.drain import Pit
 from tunnelnet.env import snapshot as env_snapshot
 from tunnelnet.fire import Detector
 from tunnelnet.ns import Stage, control_chain
-from tunnelnet.reporting import audit_export, telemetry_export, to_csv
+from tunnelnet.reporting import audit_export, audit_rows, telemetry_export, to_csv
 from tunnelnet.reporting import store_export as store_csv_export
 from tunnelnet.store import export_all, export_kind, list_approvals, revoke_approval, summarize
 
@@ -711,7 +711,42 @@ def audit_append(server: "Server", request: Request) -> Response:
 
 
 def audit_clear(server: "Server", request: Request) -> Response:
-    return json_response({"count": server.runtime.audit.clear()})
+    return json_response(server.runtime.audit_retention.clear_archived())
+
+
+def audit_retention(server: "Server", request: Request) -> Response:
+    return json_response(server.runtime.audit_retention.status())
+
+
+def audit_retention_run(server: "Server", request: Request) -> Response:
+    return json_response(server.runtime.audit_retention.run().as_dict())
+
+
+def audit_archive(server: "Server", request: Request) -> Response:
+    archive = server.runtime.audit_archive
+    packs = archive.packs()
+    return json_response(
+        {
+            "packs": [pack.as_dict() for pack in packs],
+            "count": len(packs),
+            "records": sum(pack.records for pack in packs),
+            "describe": archive.describe(),
+        }
+    )
+
+
+def audit_archive_query(server: "Server", request: Request) -> Response:
+    archive = server.runtime.audit_archive
+    records = archive.query(
+        event=request.query_field("event"),
+        start=request.query_field("start"),
+        end=request.query_field("end"),
+    )
+    return json_response({"items": [record.as_dict() for record in records], "count": len(records)})
+
+
+def audit_archive_verify(server: "Server", request: Request) -> Response:
+    return json_response(server.runtime.audit_archive.verify(day=request.query_field("day")))
 
 
 def audit_marks_clear(server: "Server", request: Request) -> Response:
@@ -762,7 +797,22 @@ def simulate(server: "Server", request: Request) -> Response:
 
 
 def export_audit(server: "Server", request: Request) -> Response:
-    columns, rows = audit_export(server.runtime.audit)
+    rt = server.runtime
+    source = request.query_field("source")
+    event = request.query_field("event")
+    start = request.query_field("start")
+    end = request.query_field("end")
+    if not any((source, event, start, end)):
+        columns, rows = audit_export(rt.audit)
+        return csv_response(to_csv(columns, rows))
+    records = source_records(rt.audit, rt.audit_archive, source or "online")
+    if event:
+        records = [record for record in records if record.event == event]
+    if start:
+        records = [record for record in records if record.at >= start]
+    if end:
+        records = [record for record in records if record.at <= end]
+    columns, rows = audit_rows(records)
     return csv_response(to_csv(columns, rows))
 
 

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING
 
-from tunnelnet.audit import AuditRegistry
+from tunnelnet.audit import AuditRegistry, Record
 from tunnelnet.store import Store
 
 if TYPE_CHECKING:  # pragma: no cover - imported only for type checkers
@@ -30,12 +30,18 @@ def to_csv(columns: Sequence[str], rows: Sequence[Sequence[object]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def audit_rows(records: Iterable[Record]) -> tuple[list[str], list[list[str]]]:
+    """Columns and rows for any consistent set of audit records."""
+
+    columns = ["id", "event", "at"]
+    rows = [[record.id, record.event, record.at] for record in records]
+    return columns, rows
+
+
 def audit_export(registry: AuditRegistry) -> tuple[list[str], list[list[str]]]:
     """Columns and rows for the linkage audit trail."""
 
-    columns = ["id", "event", "at"]
-    rows = [[record.id, record.event, record.at] for record in registry.list()]
-    return columns, rows
+    return audit_rows(registry.list())
 
 
 def store_export(store: Store) -> tuple[list[str], list[list[object]]]:

@@ -533,8 +533,10 @@ class ConsoleCase(unittest.TestCase):
         status, body = self.call("GET", "/api/export/store")
         self.assertIn("kind,records", body)
 
+        # Clear is guarded: records that were never archived must be kept.
         status, body = self.call("POST", "/api/audit/clear")
-        self.assertEqual(body["count"], 0)
+        self.assertEqual(body["cleared"], 0)
+        self.assertGreater(body["count"], 0)
 
     def test_cycle_and_simulate_routes(self) -> None:
         status, body = self.call(

@@ -18,9 +18,12 @@ from .seed import seed_defaults
 class Server:
     """Owns the runtime state and dispatches console requests."""
 
-    def __init__(self, store: Store, web_dir: str = "web") -> None:
-        self.runtime = Runtime(store)
+    def __init__(self, store: Store, web_dir: str = "web", audit_online_days: int = 7) -> None:
+        self.runtime = Runtime(store, audit_online_days)
         seed_defaults(self.runtime)
+        # One idempotent retention pass at boot, so the online window stays
+        # bounded even when no external scheduler drives the endpoint.
+        self.runtime.audit_retention.run()
         self.web_dir = web_dir
         self.router = Router()
         self.metrics = Metrics()
@@ -86,7 +89,7 @@ class Server:
         return [response.body]
 
 
-def create_application(store: Store, web_dir: str = "web") -> Server:
+def create_application(store: Store, web_dir: str = "web", audit_online_days: int = 7) -> Server:
     """Build a ready to serve console for the supplied store."""
 
-    return Server(store, web_dir)
+    return Server(store, web_dir, audit_online_days)

@@ -681,8 +681,9 @@ class AuditCase(unittest.TestCase):
         self.assertEqual(summary(records)["total"], 3)
         self.assertEqual(first.as_dict(), {"id": "a1", "event": "access", "at": "2026-01-01T00:00:00Z"})
         self.assertEqual(second.as_dict()["event"], "fire")
-        registry.clear()
-        self.assertEqual(registry.count(), 0)
+        self.assertTrue(registry.evict("a1"))
+        self.assertFalse(registry.evict("a1"))
+        self.assertEqual(registry.count(), 2)
         self.assertIsNone(most_recent([]))
 
     def test_mark_set(self) -> None:
